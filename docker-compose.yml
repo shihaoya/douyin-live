@@ -1,0 +1,97 @@
+version: '3.8'
+
+services:
+  # MySQL 数据库
+  mysql:
+    image: mysql:8.0
+    container_name: douyin-live-mysql
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root123456}
+      MYSQL_DATABASE: ${DB_NAME:-douyin_live}
+      MYSQL_USER: ${DB_USER:-douyin}
+      MYSQL_PASSWORD: ${DB_PASSWORD:-douyin123456}
+      TZ: Asia/Shanghai
+    ports:
+      - "${DB_PORT:-3306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./server/database/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+      - ./server/database/create_value_mappings.sql:/docker-entrypoint-initdb.d/02-value-mappings.sql
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-authentication-plugin=mysql_native_password
+    networks:
+      - douyin-live-network
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-p${MYSQL_ROOT_PASSWORD:-root123456}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # 后端服务
+  backend:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: douyin-live-backend
+    restart: always
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: ${PORT:-5678}
+      DB_HOST: mysql
+      DB_USER: ${DB_USER:-douyin}
+      DB_PASSWORD: ${DB_PASSWORD:-douyin123456}
+      DB_NAME: ${DB_NAME:-douyin_live}
+      DB_PORT: 3306
+      DOUYIN_COOKIE: ${DOUYIN_COOKIE}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      QQ_BOT_APP_ID: ${QQ_BOT_APP_ID:-}
+      QQ_BOT_APP_SECRET: ${QQ_BOT_APP_SECRET:-}
+      QQ_BOT_USER_ID: ${QQ_BOT_USER_ID:-}
+      MONITOR_CHECK_INTERVAL: ${MONITOR_CHECK_INTERVAL:-60000}
+      MONITOR_RESTART_COOLDOWN: ${MONITOR_RESTART_COOLDOWN:-300000}
+    ports:
+      - "${PORT:-5678}:${PORT:-5678}"
+    volumes:
+      - backend_logs:/app/logs
+      - ./server/qqbot_openid.json:/app/qqbot_openid.json
+    networks:
+      - douyin-live-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${PORT:-5678}/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # 前端服务 (Nginx)
+  frontend:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    container_name: douyin-live-frontend
+    restart: always
+    depends_on:
+      - backend
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - douyin-live-network
+
+volumes:
+  mysql_data:
+    driver: local
+  backend_logs:
+    driver: local
+
+networks:
+  douyin-live-network:
+    driver: bridge
